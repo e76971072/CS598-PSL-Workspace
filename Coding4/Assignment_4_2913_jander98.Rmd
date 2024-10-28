@@ -1,0 +1,853 @@
+---
+title: "(PSL) Coding Assignment 4"
+output: html_document
+---
+
+## Team members:
+
+ - Jesse Anderson - jander98
+ - Ailing Li - ailingl2
+ - Kevin Nguyen - kn28
+
+### Contributions
+
+- **Contribution from Jesse**
+  - Tasks completed: Completed Part II and, for Part I, assisted with debugging, added 100 iterations, and created a graph.
+  
+- **Contribution from Ailing**
+  - Tasks completed: Part I: Worked on the E-step and M-step, and assembled the draft of the final version of the assignment.
+
+- **Contribution from Kevin**
+  - Tasks completed: Part I: Worked on the loglike and myEM
+
+***
+
+
+## Part I: Gaussian Mixtures
+
+**Objective**
+
+   Implement the EM algorithm from scratch for a p-dimensional Gaussian mixture model with G components:
+$$
+\sum_{k=1}^{G} p_k \cdot N(x; \mu_k, \Sigma)
+$$
+
+ **Requirements**
+  
+   Your implementation should consist of four functions:
+
+  - **E-step function**: This function should return an \( n \times G \) matrix, where the \( (i,j) \)th entry represents the conditional probability \( P(Z_i = k | x_i) \). Here \( i \) ranges from 1 to \( n \) and \( k \) ranges from 1 to \( G \).
+
+  - **M-step function**: This function should return the updated parameters for the Gaussian mixture model.
+
+  - **loglik function**: This function computes the log-likelihood of the data given the parameters.
+
+  - **myEM function (main function)**: Inside this function, you can call the E-step and M-step functions. The function should take the following inputs and return the estimated parameters and log-likelihood (via the loglik function):
+    
+    - **Input**:
+    
+      *  data: The dataset.
+      *  G: The number of components. Although your code will be tested with \( G = 2 \) and \( G = 3 \), it should be able to handle any value of \( G \) (you can, of course, ignore the case where \( G > n \)).
+      *  Initial parameters.
+      *  itmax: The number of iterations.
+  
+    - **Output**:
+      *  prob: A \( G \)-dimensional probability vector \( (p_1, \ldots, p_G) \).
+      *  mean: A \( p \times G \) matrix with the \( k \)-th column being \( \mu_k \), the \( p \)-dimensional mean for the \( k \)-th Gaussian component.
+      *  Sigma: A \( p \times p \) covariance matrix \( \Sigma \) shared by all \( G \) components.
+      *  loglik: A number equal to \( \sum_{i=1}^{n} \log \left( \sum_{k=1}^{G} p_k \cdot N(x; \mu_k, \Sigma) \right) \).
+
+
+```{r}
+Estep = function(data, pi_k, mu_k, Sigma) {
+  n = nrow(data)
+  G = length(pi_k)
+  p = ncol(data)
+
+  # Precompute constants
+  inv_sigma = solve(Sigma)
+
+  # Init log-density matrix
+  log_density_matrix = matrix(0, nrow = n, ncol = G)
+
+  log_density_matrix = sapply(1:G, function(k) {
+    # Compute diff = data - mu_k[k, ]
+    diff = sweep(data, 2, mu_k[k, ], "-")
+
+    # Compute exponent = rowSums((diff %*% inv_sigma) * diff)
+    exponent = rowSums((diff %*% inv_sigma) * diff)
+
+
+    density = log(pi_k[k]) - 0.5 * exponent
+    return(density)
+  })
+
+  # Use log-sum-exp to compute the posterior probabilities
+  max_log_density = apply(log_density_matrix, 1, max)
+  density_matrix = exp(log_density_matrix - max_log_density)
+  row_sums = rowSums(density_matrix)
+  posterior = density_matrix / row_sums
+
+  return(posterior)
+}
+
+```
+
+
+
+```{r}
+#Maximization Step: optimizing the covariance matrix
+Mstep = function(data, posterior) {
+  n = nrow(data)
+  G = ncol(posterior)
+  p = ncol(data)
+  
+  total_posterior = colSums(posterior)
+  
+  # Update mixing coefficients
+  pi_k_new = total_posterior / n
+  
+  # Update means
+  mu_k_new = (t(posterior) %*% data) / total_posterior  # G x p
+  
+  # Update shared covariance matrix Sigma
+  Sigma_new = matrix(0, nrow = p, ncol = p)
+  
+  for (k in 1:G) {
+    #comp weighted diff
+    diff = sweep(data, 2, mu_k_new[k, ], "-")
+    weighted_diff = posterior[, k] * diff
+    Sigma_new = Sigma_new + t(weighted_diff) %*% diff
+  }
+  
+  # Divide by n to get the average
+  Sigma_new = Sigma_new / n
+  
+  return(list(pi_k = pi_k_new, mu_k = mu_k_new, Sigma = Sigma_new))
+}
+
+```
+
+
+ 
+```{r}
+# loglik Function: Compute log-likelihood with log-sum-exp
+loglik = function(data, pi_k, mu_k, Sigma) {
+  n = nrow(data)
+  G = length(pi_k)
+  p = ncol(data)
+  inv_sigma = solve(Sigma)
+  det_sigma = det(Sigma)
+  
+  if (!is.finite(det_sigma) || det_sigma <= 0) {
+    stop("Covariance matrix is not positive-definite.")
+  }
+  coef = -0.5 * (p * log(2 * pi) + log(det_sigma))
+  
+  # Init log-likelihood matrix
+  log_likelihood_matrix = matrix(0, nrow = n, ncol = G)
+  
+  for (k in 1:G) {
+    # comp diff = data - mu_k[k, ]
+    diff = sweep(data, 2, mu_k[k, ], "-")
+    
+    # comp exponent
+    exponent = rowSums((diff %*% inv_sigma) * diff)
+    
+    # comp log-density
+    log_density = log(pi_k[k]) + coef - 0.5 * exponent
+    
+    # Store in the matrix
+    log_likelihood_matrix[, k] = log_density
+  }
+  
+  # comp the total log-likelihood using log-sum-exp
+  max_log_density = apply(log_likelihood_matrix, 1, max)
+  total_loglik = sum(max_log_density + log(rowSums(exp(log_likelihood_matrix - max_log_density))))
+  
+  return(total_loglik)
+}
+
+myEM = function(data, G, pi_k_init, mu_k_init, Sigma_init, itmax, tol = 1e-6) {
+  # Init param
+  pi_k = pi_k_init
+  mu_k = mu_k_init
+  Sigma = Sigma_init
+  
+  # Inite log-likelihood storage
+  log_lik_values = numeric(itmax)
+  
+  for (iter in 1:itmax) {
+    # E-step: comp posterior probabilities
+    posterior = Estep(data, pi_k, mu_k, Sigma)
+    
+    # M-step: Update parameters
+    params = Mstep(data, posterior)
+    pi_k = params$pi_k
+    mu_k = params$mu_k
+    Sigma = params$Sigma
+    
+    # comp log-likelihood
+    log_lik = loglik(data, pi_k, mu_k, Sigma)
+    log_lik_values[iter] = log_lik
+    
+    # Check for convergence
+    if (iter > 1 && abs(log_lik_values[iter] - log_lik_values[iter - 1]) < tol) {
+      log_lik_values = log_lik_values[1:iter]
+      cat("Convergence reached at iteration:", iter, "\n")
+      break
+    }
+  }
+  
+  result = list(
+    prob = pi_k,
+    mean = mu_k,
+    Sigma = Sigma,
+    loglik = log_lik_values
+  )
+  
+  return(result)
+}
+
+# Custom print function
+print_results = function(prob, mean_values, sigma, loglik) {
+  cat("prob\n")
+  print(prob)
+  cat("\nmean\n")
+  print(mean_values)
+  cat("\nSigma\n")
+  print(sigma)
+  cat("\nloglik\n")
+  print(loglik)
+}
+
+
+```
+
+
+
+## Part I: Testing
+
+Test your code with the provided dataset, [faithful.dat], with both G = 2 and G = 3.
+
+**For the case when G = 2**, set your initial values as follows:
+
+ - p1 = 10/n, p2 = 1 − p1.
+ - µ1 = the mean of the first 10 samples; µ2 = the mean of the remaining samples.
+ - Calculate Σ as:
+ 
+ $$
+\frac{1}{n} \left[ [\sum_{i=1}^{10} (x_i - \mu_1)(x_i - \mu_1)^t + 
+\sum_{i=11}^{n} (x_i - \mu_2)(x_i - \mu_2)^t \right]
+$$
+
+
+```{r}
+# Load the data
+# data prep and param init 
+data("faithful")
+data_matrix = as.matrix(faithful[, c("eruptions", "waiting")])
+n = nrow(data_matrix)
+
+#init param for G = 2
+G2 = 2
+p1_G2 = 10 / n
+p2_G2 = 1 - p1_G2
+pi_k_init_G2 = c(p1_G2, p2_G2)
+
+
+mu1_G2 = colMeans(data_matrix[1:10, ])                # Mean of the first 10 samples
+mu2_G2 = colMeans(data_matrix[11:n, ])                # Mean of the remaining samples
+mu_k_init_G2 = matrix(c(mu1_G2, mu2_G2), nrow = 2, byrow = TRUE)  # Combine means into a matrix
+
+Sigma1 = matrix(0, nrow = 2, ncol = 2)
+Sigma2 = matrix(0, nrow = 2, ncol = 2)
+
+for (i in 1:10) {
+  x_i = data_matrix[i, ]
+  Sigma1 = Sigma1 + (x_i - mu1_G2) %*% t(x_i - mu1_G2)
+}
+
+# Compute contributions from cluster 2
+for (i in 11:n) {
+  x_i = data_matrix[i, ]
+  Sigma2 = Sigma2 + (x_i - mu2_G2) %*% t(x_i - mu2_G2)
+}
+
+Sigma_init_G2 = (Sigma1 + Sigma2 ) / n
+
+#init param for G = 3
+G3 = 3
+p1_G3 = 10 / n
+p2_G3 = 20 / n
+p3_G3 = 1 - p1_G3 - p2_G3
+pi_k_init_G3 = c(p1_G3, p2_G3, p3_G3)
+
+mu1_G3 = colMeans(data_matrix[1:10, ])
+mu2_G3 = colMeans(data_matrix[11:30, ])
+mu3_G3 = colMeans(data_matrix[31:n, ])
+mu_k_init_G3 = rbind(mu1_G3, mu2_G3, mu3_G3)  # G x p
+
+diff1_G3 = sweep(data_matrix[1:10, ], 2, mu1_G3, "-")
+diff2_G3 = sweep(data_matrix[11:30, ], 2, mu2_G3, "-")
+diff3_G3 = sweep(data_matrix[31:n, ], 2, mu3_G3, "-")
+Sigma_init_G3 = (t(diff1_G3) %*% diff1_G3 +
+                   t(diff2_G3) %*% diff2_G3 +
+                   t(diff3_G3) %*% diff3_G3) / n
+
+# Run EM algo for G = 2
+
+# Run for 20 iter
+em_result_G2_20 = myEM(
+  data = data_matrix,
+  G = G2,
+  pi_k_init = pi_k_init_G2,
+  mu_k_init = mu_k_init_G2,
+  Sigma_init = Sigma_init_G2,
+  itmax = 20,
+  tol = 1e-6
+)
+#run 100
+em_result_G2_100 = myEM(
+  data = data_matrix,
+  G = G2,
+  pi_k_init = pi_k_init_G2,
+  mu_k_init = mu_k_init_G2,
+  Sigma_init = Sigma_init_G2,
+  itmax = 100,
+  tol = 1e-6
+)
+
+#Rin EM for G=3
+em_result_G3_20 = myEM(
+  data = data_matrix,
+  G = G3,
+  pi_k_init = pi_k_init_G3,
+  mu_k_init = mu_k_init_G3,
+  Sigma_init = Sigma_init_G3,
+  itmax = 20,
+  tol = 1e-6
+)
+
+em_result_G3_100 = myEM(
+  data = data_matrix,
+  G = G3,
+  pi_k_init = pi_k_init_G3,
+  mu_k_init = mu_k_init_G3,
+  Sigma_init = Sigma_init_G3,
+  itmax = 100,
+  tol = 1e-6
+)
+```
+
+
+Run your EM implementation with **20** iterations. Your results from myEM are expected to look like the
+following. (Even though the algorithm has not yet reached convergence, matching the expected results below
+serves as a validation that your code is functioning as intended.)
+
+```{r}
+
+cat("---- Results for G = 2 after 20 Iterations ----\n")
+# re-oragnize expected mean to match with instruction result
+em_result_G2_20_expected = matrix(c(em_result_G2_20$mean[1, 1], em_result_G2_20$mean[1, 2],
+                                  em_result_G2_20$mean[2, 1], em_result_G2_20$mean[2, 2]), nrow = 2)
+rownames(em_result_G2_20_expected) = c("eruptions", "waiting")
+
+print_results(em_result_G2_20$prob, em_result_G2_20_expected, 
+              em_result_G2_20$Sigma, em_result_G2_20$loglik[length(em_result_G2_20$loglik)])
+
+```
+
+**For the case when G = 3**, set your initial values as follows:
+
+ - p1 = 10/n, p2 = 20/n, p3 = 1 − p1 − p2
+ - \( \mu_1 = \frac{1}{n} \sum_{i=1}^{10} (x_i) \), the mean of the first 10 samples; \( \mu_2 = \frac{1}{20} \sum_{i=11}^{30} (x_i) \), the mean of the next 20 samples; \( \mu_3 \) is the mean of the remaining samples.
+ - Calculate Σ as
+ $$
+\frac{1}{n} \left[ 
+\sum_{i=1}^{10} (x_i - \mu_1)(x_i - \mu_1)^t + 
+\sum_{i=11}^{30} (x_i - \mu_2)(x_i - \mu_2)^t + 
+\sum_{i=31}^{n} (x_i - \mu_3)(x_i - \mu_3)^t 
+\right]
+$$
+
+Run your EM implementation with 20 iterations.
+ 
+```{r}
+cat("\n---- Results for G = 3 after 20 Iterations ----\n")
+# re-oragnize expected mean to match with instruction result
+em_result_G3_20_expected = matrix(c(em_result_G3_20$mean[1, 1], em_result_G3_20$mean[1, 2],
+                                  em_result_G3_20$mean[2, 1], em_result_G3_20$mean[2, 2]), nrow = 2)
+rownames(em_result_G3_20_expected) = c("eruptions", "waiting")
+
+print_results(em_result_G3_20$prob, em_result_G3_20$mean, 
+              em_result_G3_20$Sigma, em_result_G3_20$loglik[length(em_result_G3_20$loglik)])
+
+```
+
+Additional result after ran the EM implementation with 100 iterations for G = 2 and G = 3
+
+```{r}
+cat("\n---- Results for G = 2 after 100 Iterations ----\n")
+# re-oragnize expected mean to match with instruction result
+em_result_G2_100_expected = matrix(c(em_result_G2_100$mean[1, 1], em_result_G2_100$mean[1, 2],
+                                  em_result_G2_100$mean[2, 1], em_result_G2_100$mean[2, 2]), nrow = 2)
+rownames(em_result_G2_100_expected) = c("eruptions", "waiting")
+
+print_results(em_result_G2_100$prob, em_result_G2_100$mean, 
+              em_result_G2_100$Sigma, em_result_G2_100$loglik[length(em_result_G2_100$loglik)])
+
+
+cat("\n---- Results for G = 3 after 100 Iterations ----\n")
+# re-oragnize expected mean to match with instruction result
+em_result_G3_100_expected = matrix(c(em_result_G3_100$mean[1, 1], em_result_G3_100$mean[1, 2],
+                                  em_result_G3_100$mean[2, 1], em_result_G3_100$mean[2, 2]), nrow = 2)
+rownames(em_result_G3_100_expected) = c("eruptions", "waiting")
+
+print_results(em_result_G3_100$prob, em_result_G3_100$mean, 
+              em_result_G3_100$Sigma, em_result_G3_100$loglik[length(em_result_G3_100$loglik)])
+
+
+#Plotting Log-Likelihoods
+
+# Extract log-likelihoods
+ll_G2_20 = em_result_G2_20$loglik
+ll_G2_100 = em_result_G2_100$loglik
+ll_G3_20 = em_result_G3_20$loglik
+ll_G3_100 = em_result_G3_100$loglik
+
+# Determine the maximum number of iterations among all runs
+max_iter = max(length(ll_G2_20), length(ll_G2_100), length(ll_G3_20), length(ll_G3_100))
+
+# Initialize the plot
+plot(1:max_iter, 
+     type = "n", 
+     ylim = range(c(ll_G2_20, ll_G2_100, ll_G3_20, ll_G3_100)), 
+     xlab = "Iteration", 
+     ylab = "Log-Likelihood", 
+     main = "Log-Likelihood over EM Iterations for G=2 and G=3")
+
+# Plot Log-Likelihoods for G = 2 (20 Iterations)
+lines(1:length(ll_G2_20), ll_G2_20, type = "b", col = "blue", pch = 19, lwd = 2, lty = 1)
+
+# Plot Log-Likelihoods for G = 2 (100 Iterations)
+lines(1:length(ll_G2_100), ll_G2_100, type = "b", col = "blue", pch = 17, lwd = 2, lty = 2)
+
+# Plot Log-Likelihoods for G = 3 (20 Iterations)
+lines(1:length(ll_G3_20), ll_G3_20, type = "b", col = "red", pch = 19, lwd = 2, lty = 1)
+
+# Plot Log-Likelihoods for G = 3 (100 Iterations)
+lines(1:length(ll_G3_100), ll_G3_100, type = "b", col = "red", pch = 17, lwd = 2, lty = 2)
+
+legend("bottomright", 
+       legend = c("G=2, 20 Iterations", "G=2, 100 Iterations",
+                  "G=3, 20 Iterations", "G=3, 100 Iterations"),
+       col = c("blue", "blue", "red", "red"), 
+       pch = c(19, 17, 19, 17),
+       lty = c(1, 2, 1, 2),
+       lwd = 2,
+       bty = "n")
+
+print(em_result_G2_20$loglik[length(em_result_G2_20$loglik)], digits = 10)
+print(em_result_G2_100$loglik[length(em_result_G2_100$loglik)], digits = 10)
+print(em_result_G3_20$loglik[length(em_result_G3_20$loglik)], digits = 10)
+print(em_result_G3_100$loglik[length(em_result_G3_100$loglik)], digits = 10)
+
+```
+
+Part I conclusion:  The log-likelihood results suggest that the model with 3 components and 100 interations 
+leads a better fit for the faithful dataset by increasing both the number of components and iterations. 
+
+---
+
+## Part II: HMM
+
+
+**Objective**
+
+Implement the Baum-Welch (i.e., EM) algorithm and the Viterbi algorithm **from scratch** for a Hidden Markov Model (HMM) that produces an outcome sequence of discrete random variables with three distinct values.
+
+A quick review on parameters for Discrete HMM:
+
+*   **mx**: Count of distinct values X can take.
+*   **mz**: Count of distinct values Z can take.
+*   **w**: An mz-by-1 probability vector representing the initial distribution for \(Z_1\).
+*   **A**: The mz-by-mz transition probability matrix that models the progression from \(Z_t\) to\(Z_{t+1}\).
+*   **B**: The mz-by-mx emission probability matrix, indicating how X is produced from \(Z\).
+
+Focus on updating the parameters **A** and **B** in your algorithm. The value for mx is given and you’ll specify mz
+
+For w, initiate it uniformly but refrain from updating it within your code. The reason for this is that w denotes the distribution of \(Z_1\) and we only have a single sample. It’s analogous to estimating the likelihood of a coin toss resulting in heads by only tossing it once. Given the scant information and the minimal influence on the estimation of other parameters, we can skip updating it.
+
+
+
+**Baum-Welch Algorithm**
+
+The Baum-Welch Algorihtm is the EM algorithm for the HMM. Create a function named **BW_onestep** designed to carry out the E-step and M-step. This function should then be called iteratively within **myBW**.
+
+- **BW_onstep**:
+  * **Input**:
+    * data: a T-by-1 sequence of observations
+    * Current parameter values
+  * **Output**:
+    * Updated parameters: A and B
+
+Please refer to formulas provided on Pages 7, 10, 14-16 in [lec_W7.2_HMM](https://liangfgithub.github.io/Notes/lec_W7.2_HMM.pdf)
+
+
+```{r}
+# Function for Baum-Welch One Step (E-step and M-step)
+BW_onestep = function(data, A, B, w) {
+  T = length(data)
+  mz = nrow(A)
+  mx = ncol(B)
+
+  # Forward probabilities with scaling
+  alpha = matrix(0, nrow=T, ncol=mz)
+  c = numeric(T)  # Scaling factors
+  alpha[1, ] = w * B[, data[1]]
+  c[1] = sum(alpha[1, ])
+  alpha[1, ] = alpha[1, ] / c[1]
+  for (t in 2:T) {
+    for (j in 1:mz) {
+      alpha[t, j] = sum(alpha[t - 1, ] * A[, j]) * B[j, data[t]]
+    }
+    c[t] = sum(alpha[t, ])
+    alpha[t, ] = alpha[t, ] / c[t]
+  }
+
+  # Backward probabilities with scaling
+  beta = matrix(0, nrow=T, ncol=mz)
+  beta[T, ] = 1 / c[T]
+  for (t in (T - 1):1) {
+    for (j in 1:mz) {
+      beta[t, j] = sum(A[j, ] * B[, data[t + 1]] * beta[t + 1, ]) / c[t]
+    }
+  }
+
+  # E-step: Calculate xi and gamma
+  xi = array(0, dim=c(T - 1, mz, mz))
+  gamma = matrix(0, nrow=T, ncol=mz)
+  for (t in 1:(T - 1)) {
+    denom = sum(alpha[t, ] * beta[t, ])
+    for (i in 1:mz) {
+      gamma[t, i] = alpha[t, i] * beta[t, i] / denom
+      for (j in 1:mz) {
+        xi[t, i, j] = alpha[t, i] * A[i, j] * B[j, data[t + 1]] * beta[t + 1, j]
+      }
+    }
+    xi[t, , ] = xi[t, , ] / sum(xi[t, , ])
+  }
+  gamma[T, ] = alpha[T, ] / sum(alpha[T, ])
+
+  # M-step: Update A and B
+  A_new = matrix(0, nrow=mz, ncol=mz)
+  for (i in 1:mz) {
+    denom = sum(gamma[-T, i])
+    for (j in 1:mz) {
+      A_new[i, j] = sum(xi[, i, j]) / denom
+    }
+  }
+
+  B_new = matrix(0, nrow=mz, ncol=mx)
+  for (j in 1:mz) {
+    denom = sum(gamma[, j])
+    for (k in 1:mx) {
+      B_new[j, k] = sum(gamma[data == k, j]) / denom
+    }
+  }
+
+  # Ensure no zero probabilities
+  B_new[B_new == 0] = .Machine$double.eps
+
+  list(A=A_new, B=B_new)
+}
+
+# Forward pass with scaling (helper function)
+forward_pass = function(data, A, B, w) {
+  # data: Sequence of observed data
+  # A: Transition matrix
+  # B: Emission matrix
+  # w: Initial state probabilities
+
+  T = length(data)  # Length of observed data
+  mz = nrow(A)  # Number of hidden states
+  alpha = matrix(0, nrow=T, ncol=mz)  # Matrix to store forward probabilities
+  c = numeric(T)  # Scaling factors to prevent underflow
+  alpha[1, ] = w * B[, data[1]]  # Initialization step
+  c[1] = sum(alpha[1, ])  # Compute scaling factor for first time step
+  alpha[1, ] = alpha[1, ] / c[1]  # Scale alpha to avoid underflow
+
+  # Forward pass
+  for (t in 2:T) {
+    for (j in 1:mz) {
+      alpha[t, j] = sum(alpha[t - 1, ] * A[, j]) * B[j, data[t]]
+    }
+    c[t] = sum(alpha[t, ])  # Compute scaling factor
+    alpha[t, ] = alpha[t, ] / c[t]  # Scale alpha
+  }
+  list(alpha=alpha, c=c)  # Return alpha and scaling factors
+}
+
+# Func compute KL divergence between two probability distributions
+kl_divergence = function(p, q) {
+  # Ensure no zero probabilities to avoid log(0)
+  p = p + .Machine$double.eps
+  q = q + .Machine$double.eps
+  sum(p * log(p / q))
+}
+
+# Baum-Welch Algorithm
+myBW = function(data, A, B, w, iterations=100) {
+  expected_A = matrix(c(0.49793938, 0.50206062, 0.44883431, 0.55116569), nrow=2, byrow=TRUE)
+  expected_B = matrix(c(0.22159897, 0.20266127, 0.57573976, 0.34175148, 0.17866665, 0.47958186), nrow=2, byrow=TRUE)
+
+  log_likelihoods = numeric(iterations)
+  kl_divergences = numeric(iterations)
+
+  for (i in 1:iterations) {
+    params = BW_onestep(data, A, B, w)
+    A = params$A
+    B = params$B
+
+    #Calc log-likelihood for current parameters
+    forward_result = forward_pass(data, A, B, w)
+    log_likelihood = sum(log(forward_result$c))  # Sum of log scaling factors gives log-likelihood
+    log_likelihoods[i] = log_likelihood
+
+    #Calc  KL divergence between the emission distributions of the two states
+    kl_div = kl_divergence(B[1, ], B[2, ])
+    kl_divergences[i] = kl_div
+
+    # Evaluate against expected values at the last iteration
+    if (i == iterations) {
+      cat(sprintf("\nIteration %d: Evaluating against expected values\n", i))
+      cat("Transition Matrix A:\n")
+      print(format(A, digits=8))
+      cat("Expected Transition Matrix A:\n")
+      print(format(expected_A, digits=8))
+      cat("Emission Matrix B:\n")
+      print(format(B, digits=8))
+      cat("Expected Emission Matrix B:\n")
+      print(format(expected_B, digits=8))
+
+      # Calculate accuracy percentage
+      A_diff = abs(A - expected_A)
+      B_diff = abs(B - expected_B)
+      A_accuracy = 100 / (1 + mean(A_diff))
+      B_accuracy = 100 / (1 + mean(B_diff))
+
+      cat(sprintf("\nAccuracy of Transition Matrix A: %.2f%%\n", A_accuracy))
+      cat(sprintf("Accuracy of Emission Matrix B: %.2f%%\n", B_accuracy))
+    }
+  }
+
+  # Plot the log-likelihood progression
+  log_likelihood_df = data.frame(Iteration = 1:iterations, LogLikelihood = log_likelihoods)
+  p1 =ggplot(log_likelihood_df, aes(x = Iteration, y = LogLikelihood)) +
+    geom_line(color = "blue") +
+    labs(title = "Baum-Welch Log-Likelihood Progression",
+         x = "Iteration",
+         y = "Log-Likelihood") +
+    theme_minimal()
+  print(p1)
+  # Plot the KL divergence progression
+  kl_divergence_df = data.frame(Iteration = 1:iterations, KLDivergence = kl_divergences)
+  p2 = ggplot(kl_divergence_df, aes(x = Iteration, y = KLDivergence)) +
+    geom_line(color = "red") +
+    labs(title = "KL Divergence Between Emission Distributions",
+         x = "Iteration",
+         y = "KL Divergence") +
+    theme_minimal()
+
+
+  print(p2)
+
+  list(A=A, B=B,log_likelihoods=log_likelihoods, kl_divergences=kl_divergences)
+}
+
+```
+
+**Viterbi Algorithm**
+
+This algorithm outputs the most likely latent sequence considering the data and the MLE of the parameters.
+
+**myViterbi**:
+
+  * **Input**:
+      * data: a T-by-1 sequence of observations
+      * parameters: mx, mz, w, A and B
+  * **Output**:
+      * Z: A T-by-1 sequence where each entry is a number ranging from 1 to mz.
+
+Please refer to formulas provided on Pages 18-20 in [lec_W7.2_HMM](https://liangfgithub.github.io/Notes/lec_W7.2_HMM.pdf)
+
+**Note on Calculations in Viterbi:**
+
+Many computations in HMM are based on the product of a sequence of probabilities, resulting in extremely small values. At times, these values are so small that software like R or Python might interpret them as zeros. This poses a challenge, especially for the Viterbi algorithm, where differentiating between magnitudes is crucial. If truncated to zero, making such distinctions becomes impossible. Therefore, it’s advisable to evaluate these probabilities on a logarithmic scale in the Viterbi algorithm.
+
+
+```{r}
+# Viterbi Algorithm
+myViterbi = function(data, mx, mz, w, A, B) {
+  T = length(data)
+  delta = matrix(-Inf, nrow=T, ncol=mz)
+  psi = matrix(0, nrow=T, ncol=mz)
+
+  # Initialization
+  delta[1, ] = log(w) + log(B[, data[1]])
+  psi[1, ] = 0
+
+  # Recursion
+  for (t in 2:T) {
+    for (j in 1:mz) {
+      temp = delta[t - 1, ] + log(A[, j])
+      psi[t, j] = which.max(temp)
+      delta[t, j] = max(temp) + log(B[j, data[t]])
+    }
+  }
+
+  # Termination
+  Z = integer(T)
+  Z[T] = which.max(delta[T, ])
+  for (t in (T - 1):1) {
+    Z[t] = psi[t + 1, Z[t + 1]]
+  }
+
+  Z
+}
+
+```
+
+## Part II: Testing part I
+
+
+1.   Test your code with the provided data sequence: [Coding4_part2_data.txt](https://liangfgithub.github.io/Data/Coding4_part2_data.txt). Set mz = 2 and start with
+the following initial values:
+$$
+w =
+\begin{bmatrix}
+0.5 \\
+0.5
+\end{bmatrix},
+\quad A =
+\begin{bmatrix}
+0.5 & 0.5 \\
+0.5 & 0.5
+\end{bmatrix},
+\quad B =
+\begin{bmatrix}
+\frac{1}{9} & \frac{3}{9} & \frac{5}{9} \\
+\frac{1}{6} & \frac{2}{6} & \frac{3}{6}
+\end{bmatrix}
+$$
+Run your implementation with 100 iterations. The results from your implementation of the Baum-Welch
+algorithm should match with the following:
+$$
+A = \text{the 2-by-2 transition matrix:}
+\begin{bmatrix}
+0.49793938 & 0.50206062 \\
+0.44883431 & 0.55116569
+\end{bmatrix}
+$$
+
+$$
+B = \text{the 2-by-3 emission matrix:}
+\begin{bmatrix}
+0.22159897 & 0.20266127 & 0.57573976 \\
+0.34175148 & 0.17866665 & 0.47958186
+\end{bmatrix}
+$$
+
+The output from your Viterbi algorithm implementation should align with the following benchmarks. Please cross-check your results against the complete binary sequence available in [Coding4_part2_Z.txt](https://liangfgithub.github.io/Data/Coding4_part2_Z.txt):
+
+$$
+\begin{aligned}
+1 &\ 1\ 1\ 1\ 1\ 1\ 1\ 2\ 1\ 1\ 1\ 1\ 1\ 2\ 2\ 1\ 1\ 1\ 1\ 1\ 1\ 2\ 2\ 2\ 2\ 2\ 1\ 1\ 1\ 1\ 1 \\
+1 &\ 1\ 2\ 1\ 1\ 1\ 1\ 1\ 1\ 1\ 1\ 2\ 2\ 1\ 1\ 1\ 1\ 1\ 1\ 2\ 2\ 2\ 1\ 1\ 1\ 1\ 2\ 2\ 2\ 2\ 1\ 1 \\
+\vdots & \\
+2 &\ 1\ 1\ 1\ 1\ 1\ 1\ 1
+\end{aligned}
+$$
+
+```{r}
+library(ggplot2) #note default colab lib
+
+# Testing the implementation
+data = scan("https://liangfgithub.github.io/Data/coding4_part2_data.txt", what=integer(), quiet=TRUE)
+mz = 2
+mx = 3
+
+w = c(0.5, 0.5)
+A = matrix(c(0.5, 0.5, 0.5, 0.5), nrow=2, byrow=TRUE)
+B = matrix(c(1/9, 3/9, 5/9, 1/6, 2/6, 3/6), nrow=2, byrow=TRUE)
+
+# Running Baum-Welch for 100 iterations
+result = myBW(data, A, B, w, iterations=100)
+
+# Running Viterbi Algorithm
+Z = myViterbi(data, mx, mz, w, result$A, result$B)
+cat("\nMost likely sequence of hidden states (Viterbi):\n")
+print(Z)
+
+# Load benchmark Z for evaluation
+benchmark_Z = scan("https://liangfgithub.github.io/Data/Coding4_part2_Z.txt", what=integer(), quiet=TRUE)
+
+# Comparison with benchmark Z
+evaluate_viterbi = function(Z_computed, Z_benchmark) {
+  if (length(Z_computed) != length(Z_benchmark)) {
+    cat("Length mismatch between computed and benchmark Z sequences.\n")
+    return(NULL)
+  }
+  accuracy = sum(Z_computed == Z_benchmark) / length(Z_computed) * 100
+  cat(sprintf("Viterbi Sequence Accuracy: %.3f%%\n", accuracy))
+}
+
+# Evaluate Viterbi output
+cat("\nEvaluating Viterbi Output:\n")
+evaluate_viterbi(Z, benchmark_Z)
+
+```
+
+## Part II: Testing part II:
+
+2. Initialize matrix B such that each entry is 1/3, and run your Baum-Welch algorithm for 20 and 100 iterations. Examine the resulting A and B matrices, and explain why you obtained these outcomes. Based on your findings, you should understand why we cannot initialize our parameters in a way that makes the latent states indistinguishable.
+
+```{r}
+# Initialize matrix B uniformly and run Baum-Welch for 20 and 100 iterations
+B_uniform = matrix(1/3, nrow=mz, ncol=mx)
+
+# Running Baum-Welch for 20 iterations with uniform B
+cat("\nRunning Baum-Welch with Uniform Emission Matrix B (1/3) for 20 iterations:\n")
+result_20 = myBW(data, A, B_uniform, w, iterations=20)
+
+# Running Baum-Welch for 100 iterations with uniform B
+cat("\nRunning Baum-Welch with Uniform Emission Matrix B (1/3) for 100 iterations:\n")
+result_100 = myBW(data, A, B_uniform, w, iterations=100)
+
+```
+
+When initializing matrix B such that each entry is 1/3, the Baum-Welch algorithm tends to converge more slowly or may not converge to a meaningful solution even after many iterations. This occurs because the uniform initialization makes the latent states indistinguishable. The emission probabilities are the same for all states, so the observed data does not initially provide any basis to differentiate between states.
+
+In the Baum-Welch algorithms(an Expectation Maximization algorithm), the initial parameter values significantly influence the convergence path. When latent states are indistinct, the algorithm may get stuck in a local maximum of the likelihood function where the states remain undifferentiated. This happens because the likelihood has a flat region due to the symmetry in the initial parameters, and the algorithm lacks the gradient information needed to move towards the global maximum.
+
+The Log-Likelihood progression plot shows this with the given B matrix showing a gradual increase over iterations, indicating that the model is learning. This is in contrast to the plot when B is initialized uniformly with 1/3 which gives a log-likelihood plot that is entirely flat, demonstrating that the algorithm is not making progress in improving the model.
+
+To further illustrate this point, the Kullback-Leibler(KL) divergence between the emission distributions of the latent states was plotted. This measures how one probability ditribution diverges from a second, expected probability distribution, effectively quantifying how distinguishable the emission probabilities of the states are. When B is initialized uniformly the initial KL divergence between the emission distributions is near 0 which indicates that the states are indistinguishable. As the algorithm progresses since it cannot differentiate states the KL divergence remains low over iterations. This is different when B is initialized with distinct emission probabilities since the initial KL divergence is higher the states are already somewhat distinguishable. As the algorithm progresses the KL divergence is expected to increase or stabilize at a higher level indicating that the emission distributions of the latent states are becoming more distinct. This rising/stable KL divergence would demonstrate that the algorithm is effectively learning from the data and nehancing the diferentiation between states.
+
+The point surrounding the Log-Likelihood progression plot indicating whether or not one's implementation is correct and also  showcasing why uniformly initializing was taken from [StackOverflow](https://stats.stackexchange.com/questions/513563/how-do-i-check-my-own-baum-welch-algorithm)
+
+Additionally Chapters 13.2 of *Pattern Recognition and Machine Learning by Christopher M. Bishop, 2009* and *Chapter 8.5 of ESL*(notably figure 8.6), was consulted to verify the log-likelihood tracking claim above and Chapters 8.7.2 and 6.2 of Probabilistic Machine Learning by Kevin P. Murphy, 2022 provide a reason to add the KL divergence tracking across iterations.
+
+```{r}
+# Running Baum-Welch for 1000 iterations with uniform B
+cat("\nRunning Baum-Welch with Uniform Emission Matrix B (1/3) for 1000 iterations:\n")
+result_1000 = myBW(data, A, B_uniform, w, iterations=1000)
+
+cat("\nRunning Baum-Welch with Given Emission Matrix B for 3000 iterations:\n")
+# Running Baum-Welch for 3000 iterations
+result = myBW(data, A, B, w, iterations=3000)
+
+```
+
+Result shows, even increasing the number of iterations 10 times will lead to the same matrices as 100 iterations.
